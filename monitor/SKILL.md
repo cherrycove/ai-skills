@@ -12,7 +12,7 @@ Generate Guance monitor configuration files from component CSV metrics.
 
 1. Check for `csv/{{component}}*.csv` or `csv/{{component}}.csv`; stop if missing.
 2. Parse metric name, type, unit, and tag columns.
-3. Select 5 to 10 key metrics that cover availability, resource usage, performance, business pressure, and error conditions.
+3. Target 5 to 10 key metrics that cover availability, resource usage, performance, business pressure, and error conditions. Deliver fewer when only a smaller set has verified units and defensible thresholds; never add unverified formulas or guessed thresholds just to reach the target count.
 4. Generate monitor JSON at `output/monitor/{{component}}/{{component}}.json`.
 5. Validate every DQL in both `checkers[].jsonScript.targets[].dql` and `checkers[].extend.querylist[].query.q`.
 6. If any DQL is repaired, write the repaired query back to both locations.
@@ -39,6 +39,7 @@ Do not deliver monitor JSON with unvalidated final DQL.
 
 Before selecting thresholds, verify the metric's actual value domain and behavior:
 
+- Prefer direct single-field metrics for the initial monitor set. Use a derived ratio or utilization only when its formula semantics, input units, and imported real-data result have all been verified.
 - For utilization and ratio fields, determine whether real samples use `0..1` or `0..100`. A documented percent unit alone does not prove the stored scale. Use decimal thresholds such as `0.70` and `0.85` for `0..1` data, and `70` and `85` only for `0..100` data.
 - If DQL leaves a `0..1` ratio unscaled, do not append a percent sign in the message. Either display the raw ratio or convert the query result, thresholds, and message unit together to `0..100`.
 - For "new" or "occurred" alerts, prefer incremental metrics such as `*_incr`, `increase`, or `delta`. Do not use a cumulative length, historical total, or current log length as a proxy for newly occurring events.
@@ -69,6 +70,9 @@ Before selecting thresholds, verify the metric's actual value domain and behavio
 
 - `targets[].dql` is the execution query, and `extend.querylist[].query.q` is the editor query. They must stay consistent.
 - `extend.querylist[].query.fieldFunc` must match the function used in DQL.
+- Use `query.type: simple` only for a single metric field with its selected aggregation. Do not place arithmetic or multi-field formulas only in a simple query's `q`; the editor may reconstruct the query from `field` and `fieldFunc` and discard the formula after import.
+- Derived metrics that use constants or multiple fields must use `query.type: expression` with complete `children` and `expression` metadata. The top-level `query.q` and `targets[].dql` must use the equivalent `eval(...)` query, and every child query must preserve its measurement, field, aggregation, filters, and groupBy.
+- If a derived expression cannot be represented and import-tested reliably, keep the metric in its original unit and convert the thresholds, title, and message to that same unit instead of labeling the raw value as a utilization or ratio.
 - Fixed label or dimension filters must be written to both the DQL filter clause and `extend.querylist[].query.filters`.
 - `extend.querylist[].query.groupBy` must match the DQL `BY` fields so the UI and alert semantics agree.
 - `checkerOpt.rules` and any mirrored rule structures must use one primary threshold operator per severity level; do not emit extra `and`-style range guards for the same level.
@@ -78,6 +82,7 @@ Before selecting thresholds, verify the metric's actual value domain and behavio
 - Use clear monitor titles, grouping tags, thresholds, and message templates.
 - Include component category and component name tags when available.
 - Confirm every generated query has passed validation before final delivery.
+- Confirm arithmetic queries use the expression editor contract and that imported chart values retain the same unit as their thresholds and messages.
 - The generated trigger UI should not contain the extra right-hand `and` condition block shown in Guance continuous-trigger configuration.
 - Confirm every utilization or ratio threshold matches the real `0..1` or `0..100` value domain and that the message unit matches the DQL result.
 - Confirm "new occurrence" alerts use an incremental metric and high-frequency event alerts have an explicit business baseline.

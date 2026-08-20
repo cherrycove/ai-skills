@@ -74,12 +74,20 @@ Unit research must answer:
 - whether it represents an instance total, node value, shard value, or replica value
 - whether time is seconds, milliseconds, microseconds, or a timestamp
 
+For percentage fields:
+
+- Do not infer the raw domain from `%`, a `percent` field name, or the observed magnitude alone; both `0..1` and `0..100` conventions exist.
+- Confirm the domain from first-party field definitions, API examples, an independently verifiable numerator/denominator formula, or a same-instance and same-time console/API comparison.
+- Keep Dashboard units, formulas, and Monitor thresholds on the confirmed raw scale. Document any conversion explicitly instead of relying on display formatting to change the data.
+- When the domain remains ambiguous, preserve the raw value with a custom unit and mark it `UNVERIFIED`; do not guess a conversion.
+
 If the unit cannot be confirmed, use a custom raw display and mark it `UNVERIFIED`. Do not fill in a plausible standard unit merely for visual polish.
 
 ## 6. Generate Configuration
 
 - Convert field names into readable labels with `fieldMapping` or `alias`.
 - Use `valMappings` only for confirmed enums.
+- Preserve an unconfirmed raw enum only when the field is operationally important; omit optional opaque fields that do not help the target user act.
 - Treat `*_enabled` and `*_supported` separately: the first usually describes current state and the second capability, but the official field definition remains authoritative.
 - Keep unit configuration aligned with official scope. A field alias may clarify scope, such as `Capacity (GB)` or `Capacity per Shard (GB)`.
 - Create `valColorMappings` only when status coloring is useful; do not create placeholder entries whose colors are all empty.

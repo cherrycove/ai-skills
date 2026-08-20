@@ -108,14 +108,20 @@ Every chart must contain `extend.settings.units` with one entry for every query 
 
 Use `custom` only when the unit is genuinely empty or remains unknown after first-party research. Preserve exact symbol, dimension, and case.
 
+For `%` metrics, also verify the raw value domain for the current source. Neither the `%` symbol, the metric name, nor values below `1` establish whether the data uses a `0..1` ratio or `0..100` percentage points. Configure conversion and standard percent units only after the domain is confirmed; otherwise preserve the raw value with an `UNVERIFIED` custom unit.
+
 ## 6. Singlestat
 
-- Use the final DQL directly; do not wrap it in `series_sum(...)`.
-- Keep grouped source data only when the chart needs it.
+- For a default `*` filter, reduce grouped resource series into one value with explicit business meaning.
+- Use `series_sum` over stable-ID-grouped input for additive totals, direct `avg(field)` without `BY` for non-additive ratios or average latency, and `series_max` only for an explicitly labeled worst-resource card.
+- Do not use `avg("M::... BY stable_id")` for a filtered-scope average; use a stable resource ID in the inner `BY` only when an outer series reducer needs per-resource input.
+- Prefer an object count for resource quantity.
+- Do not mechanically apply or prohibit `series_sum` across every card.
 - Set `fill: null`.
 - Set `funcList: []`.
-- Set `fieldFunc: "last"`.
+- Set `fieldFunc: "last"` for outer series reductions and `fieldFunc: "avg"` for direct non-additive averages.
 - Do not use rollup syntax.
+- Keep `queryFuncs` aligned with the selected outer reducer; direct averages use an empty `queryFuncs`.
 - Configure `valueColor`, a derived transparent `bgColor`, and `borderColor: "#E5E7EB"`.
 - Rotate overview cards through a varied palette rather than assigning one color to every card.
 
@@ -160,6 +166,6 @@ Tables default to `w=24` and `h=10`. Chart positions must not overlap within a g
 - Every query has the required common fields.
 - Every variable reference resolves, filters match variables, and `groupBy` matches DQL `BY`.
 - Table aliases, field mappings, and value mappings reference actual query fields.
-- No `singlestat` uses `series_sum(...)`.
+- Every multi-resource `singlestat` reducer matches metric semantics; additive totals may use `series_sum`, while ratios and latency use direct `avg(field)` without `BY` or an outer quoted-query average.
 - High-cardinality charts avoid duplicate statistic lines, node-level noise, and same-color grouped series.
 - Every DQL passes `dqlcheck` individually.

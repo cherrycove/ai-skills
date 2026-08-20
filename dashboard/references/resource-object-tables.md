@@ -40,7 +40,7 @@ Before generating an instance-property table, obtain object JSON or CSV and veri
 - the object measurement or class is explicit
 - at least one real resource record exists rather than only a field template
 - platform metadata, object top-level fields, and a nested `message` payload can be distinguished
-- top-level fields include real values and types
+- queryable fields include real values and types, with top-level fields distinguished from nested `message` paths
 - required account, readable instance name, and stable instance ID fields exist
 - unit metadata, API version, and update time are retained when available
 
@@ -50,15 +50,19 @@ If this input is missing, stop instance-table generation and request an object e
 
 Order columns as follows:
 
-1. account, cloud vendor, region, and project
-2. instance name and instance ID
+1. account, region, and project; include cloud vendor only when the dashboard is not already vendor-specific
+2. instance name; include the instance ID only when users need it for disambiguation or cross-system lookup
 3. architecture, version, protocol, and specification
-4. resource status, service status, and billing type
+4. resource status and service status; include billing type only when its semantics are confirmed and operationally useful
 5. private address, port, VPC, and subnet
 6. capacity, shard count, and per-shard capacity
 7. feature switches, creation time, and update time
 
-Query only top-level fields that exist in the real object sample. Do not treat node arrays inside a nested JSON string as top-level fields; create a separate node or shard detail table when that level is required.
+Prefer top-level fields that exist in the real object sample. When an operationally useful property exists only in `message`, a sample-backed `@json-path` may be queried after it passes `dqlcheck`. Do not treat a fixed array index such as `@Items[0]` as wildcard, explode, or unnest behavior; use a separate child-resource object or a clearly time-window-dependent telemetry table when a complete node, shard, or listener list is required.
+
+Query identity and display columns are separate concerns. Keep a stable resource ID in filters and `BY` when it prevents collisions, but do not expose it as a table column when a readable name is sufficient. The same applies to project IDs, VPC IDs, subnet IDs, and other implementation identifiers: show them only when they help the target operator act on the resource.
+
+Do not display every available object field. Omit fixed context, redundant identifiers, and opaque low-value enums. When removing a visible column, also remove stale alias, visible-field, width, unit, and mapping entries for that column; the identity field may remain in DQL filters or `BY`.
 
 ## 4. Detect Enum Candidates
 
@@ -95,6 +99,7 @@ Requirements:
 - One field and original value may have only one `mappingVal`.
 - Prefer the complete official data dictionary rather than mapping only values observed in the sample.
 - Do not mix unconfirmed values into confirmed mappings.
+- If an unconfirmed enum is operationally important, preserve the raw value and document the evidence gap. If it is optional and unreadable, omit the column instead of adding noise.
 - Generate `valColorMappings` only when status coloring is useful; do not create redundant entries whose colors are all empty.
 
 ## 6. Boolean Fields
@@ -120,7 +125,8 @@ Check the real type and cover `0/1`, `true/false`, or string representations whe
 - `namespace` is `custom_object`.
 - `dataSource` is the real object measurement or class.
 - `BY` uses a stable resource ID and does not mix in metric-granularity tags.
-- Every queried field exists in the object sample.
+- Every queried top-level field or `@json-path` exists in the object sample, and every `@json-path` passes `dqlcheck`.
+- Fixed array indexes are not used to present a complete child-resource list.
 - Headers are readable through `alias` or `fieldMapping`.
 - Unit settings match object semantics.
 - Every displayed enum candidate is mapped or has a documented reason for preserving the original value.

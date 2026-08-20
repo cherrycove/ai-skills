@@ -8,7 +8,7 @@ description: Generate, repair, or review Guance Dashboard JSON from real metrics
 
 Generate Guance Dashboard JSON from real metrics CSV files. Standard resource dashboards also use resource-catalog or custom-object data for instance-property tables. When the user provides a manually edited Dashboard JSON, treat it as feedback and carry its verified corrections into unfinished charts.
 
-This skill must produce an operations-usable dashboard, not a thin demo. The final output must be based only on the user-provided CSV metrics and every final DQL must pass `dqlcheck`.
+This skill must produce an operations-usable dashboard, not a thin demo. Telemetry fields must come from the user-provided metrics CSV, resource properties must come from the supplied object data, and first-party documentation may confirm semantics without inventing fields. Every final DQL must pass `dqlcheck`.
 
 ## Reference Routing
 
@@ -26,7 +26,7 @@ Input: csv/{{type}}*.csv plus tag metadata
         ->
    [Check real inputs] <- refuse generation when metrics CSV is missing
         ->               <- request object export when a standard resource table is required
-   [Parse metrics, tags, and object top-level fields]
+   [Parse metrics, tags, and object fields]
         ->
    [Research official units and enum semantics]
         ->
@@ -66,7 +66,7 @@ A standard resource dashboard must build its instance-property table from resour
 
 - the object measurement or class
 - at least one real object record rather than only a field template
-- queryable top-level fields with real types and values
+- queryable fields with real types and values, with top-level fields distinguished from nested `message` paths
 - readable account or instance names and a stable instance identifier, or the product's equivalent fields
 
 When object input is missing:
@@ -96,7 +96,7 @@ Also classify:
 - additive quantities, ratios, utilization, latency, capacity, and status fields
 - readable account and instance names, stable instance IDs, and node or shard dimensions
 
-For object data, capture the class, top-level fields, sample values, field types, unit metadata, and low-cardinality enum candidates. Nested `message` payloads are evidence sources only; do not assume their fields are queryable top-level `CO::` fields.
+For object data, capture the class, top-level fields, nested `message` paths, sample values, field types, unit metadata, and low-cardinality enum candidates. A nested field is not a top-level `CO::` field, but a sample-backed `@json-path` may be used when the path passes `dqlcheck`; prefer an equivalent top-level field when one exists.
 
 ### Step 3: Derive Variable Code From CSV
 
@@ -137,21 +137,17 @@ Consistency is mandatory:
 
 The dashboard must be useful for troubleshooting, not just overview display.
 
-Minimum requirements for every dashboard:
+Minimum requirements for a complete standard resource dashboard:
 
 - at least 1 instance-level `table` chart; for a standard resource dashboard this must query real object data
 - at least 1 row of `singlestat` KPI cards, usually 4 to 8 cards
 - at least 6 `sequence` trend charts
 
+An explicitly accepted telemetry-only exception may omit the object-backed instance table, but the delivery notes must record that limitation.
+
 If CSV coverage exists, do not silently skip important dimensions unless they are explicitly low-value and you say so.
 
-MySQL-specific minimums when matching CSV files exist:
-
-- `mysql`: include connection, query, transaction, and network trends
-- `mysql_user_status`: include at least 1 user-dimension table with `BY host, user`
-- `mysql_schema`: include at least 1 schema-dimension table with `BY host, schema_name`
-- `mysql_table_schema`: include at least 1 table-dimension table with `BY host, table_schema, table_name`
-- `mysql_replication`: include at least 1 replication-related chart
+When matching CSV files expose user, schema, table, replication, queue, tool, or operation dimensions, add the corresponding high-cardinality operational views. Drive this from the real measurements and tags instead of hard-coding one product's measurement names into the generic skill.
 
 Do not:
 
@@ -315,6 +311,8 @@ Recommended mappings:
 
 Only use `custom` when the unit is actually empty or remains unrecognized after research. Distinguish bytes from bits, ratios from percentages, cumulative values from rates, and instance totals from node or shard values.
 
+For percentage-like metrics, confirm the raw value domain as well as the display symbol for the current product, API version, and collector. A `%` unit, a `percent` field name, or observed values below `1` cannot independently distinguish `0..1` ratios from `0..100` percentage points. Apply scaling and standard percent units only after first-party documentation, API examples, a verified formula, or same-time console comparison confirms the domain; otherwise preserve the raw value with an `UNVERIFIED` custom unit. Keep Dashboard and Monitor thresholds on the same confirmed raw scale.
+
 ## Chart Rules
 
 ### Singlestat Rules
@@ -323,20 +321,27 @@ Use `singlestat` for overview KPIs.
 
 Required behavior:
 
-- use the final DQL directly, without wrapping it in `series_sum(...)`
-- keep the final DQL grouped by the variable code when the chart needs grouped source data
+- when the default `*` filter can return several resources, reduce the grouped source series into one value with explicit business meaning
+- use `series_sum("M::... BY <stable_id>")` for additive quantities such as total connections, throughput, errors, or queue length
+- use a direct `M::measurement:(avg(field) AS alias) { filters }` without `BY` for non-additive ratios, utilization, hit rate, load, or average latency
+- do not implement a non-additive average as `avg("M::... BY <stable_id>")`; averaging a grouped intermediate is not the same query semantics as the intended filtered-scope average
+- use `series_max(...)` only for an explicitly labeled worst-resource KPI
+- prefer an object count for resource quantity rather than summing telemetry
+- keep the inner DQL grouped by a stable resource ID only when an outer series reducer such as `series_sum` or `series_max` actually requires per-resource input
 - use `fill = null`
 - use `funcList = []`
-- use `fieldFunc = "last"`
+- use `fieldFunc = "last"` for outer series reductions and `fieldFunc = "avg"` for direct non-additive averages
 - do not use rollup syntax here
-- do not aggregate with `AVG()` or `SUM()` directly inside the core KPI field expression when a direct field is enough
+- do not mechanically force every card to use either `series_sum` or no outer reducer
+- keep `queryFuncs` aligned with the selected outer reducer; direct averages use an empty `queryFuncs`
 - include units
 - include outer query metadata fields such as `name`, `type`, `unit`, `color`, and `qtype`
 
 Example validation commands:
 
 ```bash
-./dql/bin/dqlcheck -q 'M::`mysql`:(`Threads_connected` AS `Connections`) { `host` = "#{host}" } BY `host`'
+./dql/bin/dqlcheck -q "series_sum(\"M::\`service\`:(last(\`connections_average\`) AS \`Connections\`) { \`instance_id\` = '#{instance_id}' } BY \`instance_id\`\")"
+./dql/bin/dqlcheck -q "M::\`service\`:(avg(\`cpu_average\`) AS \`CPU Utilization\`) { \`instance_id\` = '#{instance_id}' }"
 ```
 
 ### Sequence Rules
@@ -345,17 +350,18 @@ Use `sequence` for trends.
 
 Required behavior:
 
-- counters should prefer rate or rollup-style logic where compatible
-- if rollup causes rendering or compatibility problems, degrade to a simpler `fill(last(...), linear)` style query
-- non-counters should usually use `AVG(field)`
+- classify the metric before choosing a query; raw counters, raw gauges, and cloud-side pre-aggregated fields are not interchangeable
+- raw counters should prefer rate or compatible rollup logic
+- raw gauges should usually use `AVG(field)`
+- cloud-side pre-aggregated `*_average` fields should use `fill(last(field), linear)` rather than a second `AVG()`
 - use `fill = "linear"`
 - use `currentChartType = "area"`
 - use `chartType = "areaLine"`
 - use `funcList = []`
 - use `queryFuncs = []`
 - use `groupByTime = ""`
-- use `fieldFunc = "last"` for rate-like counters
-- use `fieldFunc = "avg"` for average-value metrics
+- use `fieldFunc = "last"` for rate-like counters and cloud-side pre-aggregated fields queried with `last`
+- use `fieldFunc = "avg"` only for raw gauges whose DQL actually uses `AVG(field)`
 - use `=` in filters, not regex operators
 - include units
 
@@ -376,7 +382,7 @@ Do not apply a second `AVG()` to already aggregated `*_average` fields. Default 
 
 Use `table` charts for instance lists and high-cardinality operational views.
 
-At least one instance-level table is mandatory.
+At least one object-backed instance-level table is mandatory for a complete standard resource dashboard. Omit it only under the explicitly accepted telemetry-only exception from Step 1A.
 
 When the CSV supports richer dimensions, prefer:
 
@@ -391,7 +397,7 @@ For a standard resource dashboard, use a real custom-object query for the instan
 CO::service_object:(last(`account_name`), last(`instance_name`), last(`region_id`), last(`status`)) { `account_name` = '#{account_name}' and `instance_id` = '#{instance_id}' } BY `instance_id`
 ```
 
-Use `namespace: "custom_object"`, the real object measurement/class as `dataSource`, and a stable resource ID in `groupBy`. Query only top-level fields found in the object sample. Use verified `alias`/`fieldMapping` and `valMappings` for readable columns; preserve unknown values rather than guessing.
+Use `namespace: "custom_object"`, the real object measurement/class as `dataSource`, and a stable resource ID in `groupBy`. Query top-level fields found in the object sample, plus validated `@json-path` fields only when no equivalent top-level field exists. Fixed array indexes do not expand a complete child-resource list. Keep stable IDs in filters and grouping without exposing them as columns when readable names suffice. Use verified `alias`/`fieldMapping` and `valMappings`; preserve unknown raw values only for operationally important fields and omit optional opaque fields rather than guessing.
 
 ## Layout Rules
 
@@ -473,11 +479,12 @@ If a query still fails after repair attempts, say so explicitly and do not prese
 - every DQL variable reference resolves across all `main.vars` entries.
 - every `filters.name` and `filters.value` matches an actual variable, and `groupBy` matches the DQL `BY` display dimensions.
 - every chart has units configured.
-- no `singlestat` uses `series_sum(...)`.
+- every multi-resource `singlestat` uses a reducer that matches metric semantics; additive cards may use `series_sum`, while ratios and latency use direct `avg(field)` without `BY` or an outer quoted-query average.
 - every `singlestat` uses `fill = null`.
 - every `sequence` uses valid fill and chart-type settings.
-- at least 1 instance table exists.
+- a complete standard resource dashboard has at least 1 object-backed instance table; an accepted telemetry-only exception is documented instead.
 - a standard resource instance table uses `CO::`, `custom_object`, the real object class, and a stable resource ID.
+- internal IDs may remain in filters and `BY` without appearing in the visible table; presentation metadata contains only intentional columns.
 - at least 1 overview KPI row exists.
 - at least 6 trend charts exist.
 - all final DQL has passed `dqlcheck`.

@@ -15,13 +15,33 @@ Do not apply another `AVG()` to a cloud-monitoring field that is already aggrega
 
 ## 2. Overview Queries
 
-Use the final DQL directly for a `singlestat`. Do not wrap it in `series_sum(...)`.
+An overview card that supports a default `*` filter commonly receives one latest series per resource. Reduce those series explicitly so the card does not display an arbitrary member.
 
-- Keep the final DQL grouped by a real variable only when the card needs grouped source data.
-- Use `fill: null`, `funcList: []`, and `fieldFunc: "last"`.
-- Do not apply `AVG()` or `SUM()` mechanically when a direct field expression is sufficient.
-- If a true cross-instance aggregate is explicitly required, express and validate it with supported native query semantics; do not reintroduce `series_sum(...)`.
-- Use a separate "worst instance" card only when that meaning is explicit.
+| Business meaning | Outer reducer |
+|---|---|
+| Total connections, QPS/TPS, traffic, errors, queue or log length | `series_sum` |
+| CPU or memory utilization, hit rate, ratio, load, average latency | Direct native `avg(field)` without `BY` |
+| Explicitly labeled worst resource | `series_max` |
+| Resource quantity | Prefer an object count |
+
+For additive totals, use a stable resource ID in the inner `BY`, then apply the semantic outer reducer:
+
+```dql
+series_sum("M::`service`:(last(`connections_average`) AS `Connections`) { `instance_id` = '#{instance_id}' } BY `instance_id`")
+```
+
+For a non-additive filtered-scope average, aggregate the field directly and do not group first:
+
+```dql
+M::`service`:(avg(`cpu_average`) AS `CPU Utilization`) { `instance_id` = '#{instance_id}' }
+```
+
+Do not replace this with `avg("M::... BY stable_id")`; the grouped intermediate plus second-stage average has different query semantics from the intended direct filtered average.
+
+- Use `fill: null` and `funcList: []`. Use `fieldFunc: "last"` for outer series reductions and `fieldFunc: "avg"` for direct averages.
+- Keep `queryFuncs` aligned with the outer reducer; direct averages use an empty `queryFuncs`.
+- Do not force every card to use `series_sum`, and do not ban it from additive totals.
+- Do not use a direct grouped DQL for a multi-resource singlestat unless the UI behavior is intentionally multi-valued.
 
 Capacity specifications, creation time, architecture, and status are resource properties rather than telemetry totals. Put them in the resource-object instance table.
 
